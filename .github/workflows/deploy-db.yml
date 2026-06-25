@@ -1,0 +1,331 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# CMS DATABASE — Schema Migration Pipeline
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# STAGES:
+#   deploy-dev   → Dev VM SQL Server   (develop branch)
+#   deploy-prod  → Prod DB VM          (main branch + manual approval)
+#
+# HOW IT WORKS:
+#   1. Copies numbered SQL scripts (01_*.sql … 99_*.sql) to the target VM
+#   2. Creates CMSDatabase if it doesn't exist
+#   3. Tracks applied scripts in __MigrationHistory (never re-runs)
+#   4. Runs each new script in sorted order via sqlcmd inside the SQL Server container
+#   5. Reports table count to confirm success
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# REQUIRED SECRETS  (repo → Settings → Secrets → Actions)
+# ─────────────────────────────────────────────────────────────────────────────
+#   DEV_SSH_HOST        (Dev VM — SQL Server runs here)
+#   DEV_SSH_USER        root
+#   DEV_SSH_KEY_B64     base64-encoded SSH private key for Dev VM
+#   DEV_SA_PASSWORD     SQL Server SA password on Dev VM
+#
+#   PROD_DB_SSH_HOST    (Prod DB VM — SQL Server runs here)
+#   PROD_DB_SSH_USER    root
+#   PROD_SSH_KEY_B64    base64-encoded SSH private key for Prod DB VM
+#   PROD_SA_PASSWORD    SQL Server SA password on Prod DB VM
+# ═══════════════════════════════════════════════════════════════════════════════
+
+name: CMS DB — Schema Migrations
+
+on:
+  push:
+    branches:
+      - develop
+      - main
+    paths:
+      - 'schema/[0-9][0-9]_*.sql'
+      - 'data/*.sql'
+      - '.github/workflows/deploy-db.yml'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run — show what WOULD run without applying'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: db-migrations-${{ github.ref }}
+  cancel-in-progress: false
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STAGE 1 — DEPLOY DEV
+# ═══════════════════════════════════════════════════════════════════════════════
+jobs:
+  deploy-dev:
+    name: "Deploy Schema → Dev"
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop' || github.event_name == 'workflow_dispatch'
+    environment: development
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: List migration scripts
+        run: |
+          echo "=== Scripts to deploy ==="
+          ls schema/[0-9][0-9]_*.sql 2>/dev/null | sort || echo "No numbered scripts found"
+          COUNT=$(ls schema/[0-9][0-9]_*.sql 2>/dev/null | wc -l)
+          echo "=== Total: $COUNT scripts ==="
+
+      - name: Install sshpass
+        run: sudo apt-get install -y sshpass
+
+      - name: Copy migration scripts to Dev VM
+        env:
+          SSHPASS: ${{ secrets.DEV_SSH_PASSWORD }}
+        run: |
+          sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o ConnectTimeout=30 \
+              ${{ secrets.DEV_SSH_USER }}@${{ secrets.DEV_SSH_HOST }} \
+              'mkdir -p /opt/cmsapp/dbdeploy/data'
+          if ls schema/[0-9][0-9]_*.sql 2>/dev/null | head -1 | grep -q .; then
+            sshpass -e scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                schema/[0-9][0-9]_*.sql \
+                ${{ secrets.DEV_SSH_USER }}@${{ secrets.DEV_SSH_HOST }}:/opt/cmsapp/dbdeploy/
+          fi
+          if ls data/*.sql 2>/dev/null | head -1 | grep -q .; then
+            sshpass -e scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                data/*.sql \
+                ${{ secrets.DEV_SSH_USER }}@${{ secrets.DEV_SSH_HOST }}:/opt/cmsapp/dbdeploy/data/
+          fi
+
+      - name: Run migrations on Dev VM
+        env:
+          SSHPASS: ${{ secrets.DEV_SSH_PASSWORD }}
+          SA_PASSWORD: ${{ secrets.DEV_SA_PASSWORD }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              ${{ secrets.DEV_SSH_USER }}@${{ secrets.DEV_SSH_HOST }} \
+              "bash -s" << REMOTE
+          set -e
+          SQL_CONTAINER="sqlserver"
+          SA_PASSWORD='${SA_PASSWORD}'
+          DRY_RUN='${DRY_RUN}'
+          DB_NAME="CMSDatabase"
+          DEPLOY_DIR="/opt/cmsapp/dbdeploy"
+
+          run_sql() {
+            docker exec "\$SQL_CONTAINER" /opt/mssql-tools18/bin/sqlcmd \
+              -S localhost -U sa -P "\$SA_PASSWORD" -C "\$@" 2>/dev/null || \
+            docker exec "\$SQL_CONTAINER" /opt/mssql-tools/bin/sqlcmd \
+              -S localhost -U sa -P "\$SA_PASSWORD" "\$@"
+          }
+
+          echo "=== Checking SQL Server ==="
+          docker ps | grep -q "\$SQL_CONTAINER" || { echo "ERROR: SQL Server not running"; exit 1; }
+
+          echo "=== Creating database if not exists ==="
+          [ "\$DRY_RUN" != "true" ] && run_sql -Q \
+            "IF DB_ID('\$DB_NAME') IS NULL BEGIN CREATE DATABASE [\$DB_NAME]; PRINT 'Created'; END ELSE PRINT 'Already exists';"
+
+          echo "=== Ensuring __MigrationHistory table ==="
+          [ "\$DRY_RUN" != "true" ] && run_sql -d "\$DB_NAME" -Q "
+            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='__MigrationHistory')
+            CREATE TABLE dbo.__MigrationHistory (
+              Id         INT IDENTITY(1,1) PRIMARY KEY,
+              ScriptName NVARCHAR(255) NOT NULL UNIQUE,
+              AppliedAt  DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+              DurationMs INT NULL
+            ); PRINT '__MigrationHistory ready';"
+
+          echo "=== Running migrations ==="
+          APPLIED=0; SKIPPED=0; FAILED=0
+          for SCRIPT_PATH in \$(ls "\$DEPLOY_DIR"/[0-9][0-9]_*.sql 2>/dev/null | sort); do
+            SCRIPT=\$(basename "\$SCRIPT_PATH")
+            if [ "\$DRY_RUN" = "true" ]; then
+              echo "  WOULD apply: \$SCRIPT"; APPLIED=\$((APPLIED+1)); continue
+            fi
+            ALREADY=\$(run_sql -d "\$DB_NAME" -h -1 -W \
+              -Q "SET NOCOUNT ON; SELECT COUNT(*) FROM dbo.__MigrationHistory WHERE ScriptName='\$SCRIPT';" \
+              2>/dev/null | tr -d ' \r\n')
+            if [ "\${ALREADY:-0}" = "1" ]; then
+              echo "  ⏭  SKIP \$SCRIPT"; SKIPPED=\$((SKIPPED+1)); continue
+            fi
+            START_MS=\$(((\$(date +%s%N))/1000000))
+            if docker exec -i "\$SQL_CONTAINER" /opt/mssql-tools18/bin/sqlcmd \
+              -S localhost -U sa -P "\$SA_PASSWORD" -d "\$DB_NAME" -C -b \
+              < "\$SCRIPT_PATH" 2>&1; then
+              END_MS=\$(((\$(date +%s%N))/1000000))
+              DURATION=\$((END_MS - START_MS))
+              run_sql -d "\$DB_NAME" -Q \
+                "INSERT INTO dbo.__MigrationHistory (ScriptName, DurationMs) VALUES ('\$SCRIPT', \$DURATION);" > /dev/null 2>&1
+              echo "  ✅ APPLIED \$SCRIPT (\${DURATION}ms)"; APPLIED=\$((APPLIED+1))
+            else
+              echo "  ❌ FAILED \$SCRIPT"; FAILED=\$((FAILED+1)); break
+            fi
+          done
+
+          echo ""
+          echo "=== Summary: ✅ Applied: \$APPLIED | ⏭ Skipped: \$SKIPPED | ❌ Failed: \$FAILED ==="
+          [ \$FAILED -eq 0 ] || exit 1
+
+          echo "=== Table count ==="
+          run_sql -d "\$DB_NAME" -W \
+            -Q "SELECT COUNT(*) AS Tables FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE='BASE TABLE';"
+          REMOTE
+
+      - name: Write summary
+        if: always()
+        run: |
+          echo "## 🗄️ DB Migration — Dev" >> $GITHUB_STEP_SUMMARY
+          [ "${{ job.status }}" = "success" ] \
+            && echo "**Status:** ✅ Migrations applied" >> $GITHUB_STEP_SUMMARY \
+            || echo "**Status:** ❌ Failed" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STAGE 2 — DEPLOY PROD
+# ═══════════════════════════════════════════════════════════════════════════════
+  deploy-prod:
+    name: "Deploy Schema → Prod"
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: List migration scripts
+        run: |
+          echo "=== Scripts to deploy to PROD ==="
+          ls schema/[0-9][0-9]_*.sql 2>/dev/null | sort || echo "No numbered scripts found"
+
+      - name: Prepare SSH key
+        run: |
+          echo "${{ secrets.PROD_SSH_KEY_B64 }}" | base64 -d > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+
+      - name: Copy migration scripts to Prod DB VM
+        run: |
+          ssh -i /tmp/deploy_key \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              -o ConnectTimeout=30 \
+              ${{ secrets.PROD_DB_SSH_USER }}@${{ secrets.PROD_DB_SSH_HOST }} \
+              'mkdir -p /opt/cmsapp-prod/dbdeploy/data'
+          if ls schema/[0-9][0-9]_*.sql 2>/dev/null | head -1 | grep -q .; then
+            scp -i /tmp/deploy_key \
+                -o StrictHostKeyChecking=no \
+                -o UserKnownHostsFile=/dev/null \
+                schema/[0-9][0-9]_*.sql \
+                ${{ secrets.PROD_DB_SSH_USER }}@${{ secrets.PROD_DB_SSH_HOST }}:/opt/cmsapp-prod/dbdeploy/
+          fi
+          if ls data/*.sql 2>/dev/null | head -1 | grep -q .; then
+            scp -i /tmp/deploy_key \
+                -o StrictHostKeyChecking=no \
+                -o UserKnownHostsFile=/dev/null \
+                data/*.sql \
+                ${{ secrets.PROD_DB_SSH_USER }}@${{ secrets.PROD_DB_SSH_HOST }}:/opt/cmsapp-prod/dbdeploy/data/
+          fi
+
+      - name: Run migrations on Prod DB VM
+        env:
+          SA_PASSWORD: ${{ secrets.PROD_SA_PASSWORD }}
+        run: |
+          ssh -i /tmp/deploy_key \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              ${{ secrets.PROD_DB_SSH_USER }}@${{ secrets.PROD_DB_SSH_HOST }} \
+              "bash -s" << REMOTE
+          set -e
+          SQL_CONTAINER="sqlserver"
+          SA_PASSWORD='${SA_PASSWORD}'
+          DB_NAME="CMSDatabase"
+          DEPLOY_DIR="/opt/cmsapp-prod/dbdeploy"
+
+          run_sql() {
+            docker exec "\$SQL_CONTAINER" /opt/mssql-tools18/bin/sqlcmd \
+              -S localhost -U sa -P "\$SA_PASSWORD" -C "\$@" 2>/dev/null || \
+            docker exec "\$SQL_CONTAINER" /opt/mssql-tools/bin/sqlcmd \
+              -S localhost -U sa -P "\$SA_PASSWORD" "\$@"
+          }
+
+          echo "=== Checking SQL Server ==="
+          docker ps | grep -q "\$SQL_CONTAINER" || { echo "ERROR: SQL Server not running"; exit 1; }
+
+          echo "=== Creating database if not exists ==="
+          run_sql -Q \
+            "IF DB_ID('\$DB_NAME') IS NULL BEGIN CREATE DATABASE [\$DB_NAME]; PRINT 'Created'; END ELSE PRINT 'Already exists';"
+
+          echo "=== Ensuring __MigrationHistory table ==="
+          run_sql -d "\$DB_NAME" -Q "
+            IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='__MigrationHistory')
+            CREATE TABLE dbo.__MigrationHistory (
+              Id         INT IDENTITY(1,1) PRIMARY KEY,
+              ScriptName NVARCHAR(255) NOT NULL UNIQUE,
+              AppliedAt  DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+              DurationMs INT NULL
+            ); PRINT '__MigrationHistory ready';"
+
+          echo "=== Running migrations ==="
+          APPLIED=0; SKIPPED=0; FAILED=0
+          for SCRIPT_PATH in \$(ls "\$DEPLOY_DIR"/[0-9][0-9]_*.sql 2>/dev/null | sort); do
+            SCRIPT=\$(basename "\$SCRIPT_PATH")
+            ALREADY=\$(run_sql -d "\$DB_NAME" -h -1 -W \
+              -Q "SET NOCOUNT ON; SELECT COUNT(*) FROM dbo.__MigrationHistory WHERE ScriptName='\$SCRIPT';" \
+              2>/dev/null | tr -d ' \r\n')
+            if [ "\${ALREADY:-0}" = "1" ]; then
+              echo "  ⏭  SKIP \$SCRIPT"; SKIPPED=\$((SKIPPED+1)); continue
+            fi
+            START_MS=\$(((\$(date +%s%N))/1000000))
+            if docker exec -i "\$SQL_CONTAINER" /opt/mssql-tools18/bin/sqlcmd \
+              -S localhost -U sa -P "\$SA_PASSWORD" -d "\$DB_NAME" -C -b \
+              < "\$SCRIPT_PATH" 2>&1; then
+              END_MS=\$(((\$(date +%s%N))/1000000))
+              DURATION=\$((END_MS - START_MS))
+              run_sql -d "\$DB_NAME" -Q \
+                "INSERT INTO dbo.__MigrationHistory (ScriptName, DurationMs) VALUES ('\$SCRIPT', \$DURATION);" > /dev/null 2>&1
+              echo "  ✅ APPLIED \$SCRIPT (\${DURATION}ms)"; APPLIED=\$((APPLIED+1))
+            else
+              echo "  ❌ FAILED \$SCRIPT"; FAILED=\$((FAILED+1)); break
+            fi
+          done
+
+          echo "=== Running data scripts ==="
+          for SCRIPT_PATH in \$(ls "\$DEPLOY_DIR"/data/*.sql 2>/dev/null | sort); do
+            SCRIPT="data/\$(basename "\$SCRIPT_PATH")"
+            ALREADY=\$(run_sql -d "\$DB_NAME" -h -1 -W \
+              -Q "SET NOCOUNT ON; SELECT COUNT(*) FROM dbo.__MigrationHistory WHERE ScriptName='\$SCRIPT';" \
+              2>/dev/null | tr -d ' \r\n')
+            if [ "\${ALREADY:-0}" = "1" ]; then
+              echo "  ⏭  SKIP \$SCRIPT"; SKIPPED=\$((SKIPPED+1)); continue
+            fi
+            START_MS=\$(((\$(date +%s%N))/1000000))
+            if docker exec -i "\$SQL_CONTAINER" /opt/mssql-tools18/bin/sqlcmd \
+              -S localhost -U sa -P "\$SA_PASSWORD" -d "\$DB_NAME" -C -b \
+              < "\$SCRIPT_PATH" 2>&1; then
+              END_MS=\$(((\$(date +%s%N))/1000000))
+              DURATION=\$((END_MS - START_MS))
+              run_sql -d "\$DB_NAME" -Q \
+                "INSERT INTO dbo.__MigrationHistory (ScriptName, DurationMs) VALUES ('\$SCRIPT', \$DURATION);" > /dev/null 2>&1
+              echo "  ✅ APPLIED \$SCRIPT (\${DURATION}ms)"; APPLIED=\$((APPLIED+1))
+            else
+              echo "  ❌ FAILED \$SCRIPT"; FAILED=\$((FAILED+1)); break
+            fi
+          done
+
+          echo ""
+          echo "=== Summary: ✅ Applied: \$APPLIED | ⏭ Skipped: \$SKIPPED | ❌ Failed: \$FAILED ==="
+          [ \$FAILED -eq 0 ] || exit 1
+
+          echo "=== Table count ==="
+          run_sql -d "\$DB_NAME" -W \
+            -Q "SELECT COUNT(*) AS Tables FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE='BASE TABLE';"
+          REMOTE
+
+      - name: Write summary
+        if: always()
+        run: |
+          echo "## 🗄️ DB Migration — Prod" >> $GITHUB_STEP_SUMMARY
+          [ "${{ job.status }}" = "success" ] \
+            && echo "**Status:** ✅ Migrations applied to Production" >> $GITHUB_STEP_SUMMARY \
+            || echo "**Status:** ❌ Failed" >> $GITHUB_STEP_SUMMARY
+          echo "| DB VM | \`${{ secrets.PROD_DB_SSH_HOST }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Approved by | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY

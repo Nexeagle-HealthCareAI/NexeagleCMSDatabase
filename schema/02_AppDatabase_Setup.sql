@@ -9,6 +9,10 @@
 -- USE EasyHMSDB;
 -- GO
 
+SET QUOTED_IDENTIFIER ON;
+SET ANSI_NULLS ON;
+GO
+
 -- =============================================================================
 -- 1. LOOKUP / REFERENCE TABLES  (no dependencies)
 -- =============================================================================

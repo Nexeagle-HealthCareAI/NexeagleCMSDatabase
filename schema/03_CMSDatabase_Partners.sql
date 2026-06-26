@@ -25,6 +25,7 @@ BEGIN
         Pincode                NVARCHAR(20)     NOT NULL,
         Email                  NVARCHAR(256)    NULL,
         PhoneNumber            NVARCHAR(20)     NULL,
+        PartnerCode            NVARCHAR(6)      NOT NULL UNIQUE,
         DashboardToken         NVARCHAR(64)     NOT NULL UNIQUE,
         CreatedByUserId        UNIQUEIDENTIFIER NULL,
         CreatedAt              DATETIME2        NOT NULL DEFAULT GETUTCDATE(),

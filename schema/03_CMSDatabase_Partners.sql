@@ -36,3 +36,15 @@ BEGIN
 END
 ELSE PRINT 'Table already exists: CmsPartners';
 GO
+
+-- Add LastLoginAt column to existing tables
+IF COL_LENGTH('dbo.CmsPartners', 'LastLoginAt') IS NULL
+BEGIN
+    ALTER TABLE dbo.CmsPartners ADD LastLoginAt DATETIME2 NULL;
+    PRINT 'Added column: LastLoginAt to CmsPartners';
+END
+ELSE
+BEGIN
+    PRINT 'Column LastLoginAt already exists in CmsPartners';
+END
+GO

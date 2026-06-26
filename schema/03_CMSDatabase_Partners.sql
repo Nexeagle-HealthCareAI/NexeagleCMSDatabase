@@ -29,6 +29,7 @@ BEGIN
         DashboardToken         NVARCHAR(64)     NOT NULL UNIQUE,
         CreatedByUserId        UNIQUEIDENTIFIER NULL,
         CreatedAt              DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
+        LastLoginAt            DATETIME2        NULL,
         CONSTRAINT PK_CmsPartners PRIMARY KEY (PartnerId),
         CONSTRAINT FK_CmsPartners_CreatedBy FOREIGN KEY (CreatedByUserId) REFERENCES dbo.CmsUsers (UserId) ON DELETE SET NULL
     );

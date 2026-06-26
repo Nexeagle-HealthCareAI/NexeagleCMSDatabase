@@ -29,11 +29,22 @@ BEGIN
         DashboardToken         NVARCHAR(64)     NOT NULL UNIQUE,
         CreatedByUserId        UNIQUEIDENTIFIER NULL,
         CreatedAt              DATETIME2        NOT NULL DEFAULT GETUTCDATE(),
-        LastLoginAt            DATETIME2        NULL,
         CONSTRAINT PK_CmsPartners PRIMARY KEY (PartnerId),
         CONSTRAINT FK_CmsPartners_CreatedBy FOREIGN KEY (CreatedByUserId) REFERENCES dbo.CmsUsers (UserId) ON DELETE SET NULL
     );
     PRINT 'Created table: CmsPartners';
 END
 ELSE PRINT 'Table already exists: CmsPartners';
+GO
+
+-- Add LastLoginAt column to existing tables
+IF COL_LENGTH('dbo.CmsPartners', 'LastLoginAt') IS NULL
+BEGIN
+    ALTER TABLE dbo.CmsPartners ADD LastLoginAt DATETIME2 NULL;
+    PRINT 'Added column: LastLoginAt to CmsPartners';
+END
+ELSE
+BEGIN
+    PRINT 'Column LastLoginAt already exists in CmsPartners';
+END
 GO

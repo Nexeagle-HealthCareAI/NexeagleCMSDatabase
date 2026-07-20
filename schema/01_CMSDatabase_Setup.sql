@@ -209,7 +209,8 @@ USING (VALUES
     ('A0000001-0000-0000-0000-000000000008', 'live-support.view',        'live-support',        'view',   'View Live Support',                 'Support',          60),
     ('A0000001-0000-0000-0000-000000000009', 'user-management.view',     'user-management',     'view',   'View Users & Roles',                'Administration',   70),
     ('A0000001-0000-0000-0000-00000000000A', 'user-management.manage',   'user-management',     'manage', 'Manage Users & Roles',              'Administration',   71),
-    ('A0000001-0000-0000-0000-00000000000B', 'settings.view',            'settings',            'view',   'View Settings',                     'System',           80)
+    ('A0000001-0000-0000-0000-00000000000B', 'settings.view',            'settings',            'view',   'View Settings',                     'System',           80),
+    ('A0000001-0000-0000-0000-00000000000C', 'insights.view',            'insights',            'view',   'View Insights (Visits/Logins/Appts)','Doctor Dekho',     90)
 ) AS source (PermissionId, [Key], PageKey, Action, DisplayName, Category, SortOrder)
 ON target.PermissionId = CONVERT(UNIQUEIDENTIFIER, source.PermissionId)
 WHEN NOT MATCHED THEN

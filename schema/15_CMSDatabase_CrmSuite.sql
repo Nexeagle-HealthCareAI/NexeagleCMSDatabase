@@ -23,7 +23,7 @@ BEGIN
         Status NVARCHAR(50) NOT NULL DEFAULT 'NEW',
         AiIntentScore INT NOT NULL DEFAULT 50,
         AiPersonaSummary NVARCHAR(MAX),
-        AssignedSalesRepId UNIQUEIDENTIFIER NULL REFERENCES CmsUsers(UserId) ON DELETE SET NULL,
+        AssignedSalesRepId UNIQUEIDENTIFIER NULL REFERENCES Users(UserID) ON DELETE SET NULL,
         DealValue DECIMAL(12,2) DEFAULT 0.00,
         LostReason NVARCHAR(MAX),
         CreatedAt DATETIME2(0) NOT NULL DEFAULT SYSUTCDATETIME(),
@@ -50,7 +50,7 @@ BEGIN
         MediaUrl NVARCHAR(500),
         WhatsappMessageId NVARCHAR(100),
         Status NVARCHAR(30) NOT NULL DEFAULT 'DELIVERED',
-        PerformedBy UNIQUEIDENTIFIER NULL REFERENCES CmsUsers(UserId) ON DELETE SET NULL,
+        PerformedBy UNIQUEIDENTIFIER NULL REFERENCES Users(UserID) ON DELETE SET NULL,
         CreatedAt DATETIME2(0) NOT NULL DEFAULT SYSUTCDATETIME()
     );
 
@@ -93,7 +93,7 @@ BEGIN
         PublishedStatus NVARCHAR(30) NOT NULL DEFAULT 'SCHEDULED',
         PublishedPostIds NVARCHAR(MAX) DEFAULT '{}', -- JSON object
         GroqPromptUsed NVARCHAR(MAX),
-        CreatedBy UNIQUEIDENTIFIER NULL REFERENCES CmsUsers(UserId) ON DELETE SET NULL,
+        CreatedBy UNIQUEIDENTIFIER NULL REFERENCES Users(UserID) ON DELETE SET NULL,
         CreatedAt DATETIME2(0) NOT NULL DEFAULT SYSUTCDATETIME()
     );
     PRINT 'Created table CrmSocialPosts';

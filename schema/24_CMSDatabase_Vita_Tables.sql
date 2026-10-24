@@ -487,5 +487,52 @@ BEGIN
 END;
 GO
 
+IF OBJECT_ID(N'dbo.VitaAgentSteps', N'U') IS NULL
+BEGIN
+    CREATE TABLE [VitaAgentSteps] (
+        id VARCHAR(40) NOT NULL, 
+        run_id VARCHAR(40) NULL, 
+        seq INTEGER NULL, 
+        agent VARCHAR(30) NULL, 
+        title NVARCHAR(400) NULL, 
+        mode_used VARCHAR(12) NULL, 
+        fallback_reason NVARCHAR(400) NULL, 
+        input_json NVARCHAR(max) NULL, 
+        output_json NVARCHAR(max) NULL, 
+        calls_json NVARCHAR(max) NULL, 
+        replayable BIT NULL, 
+        error NVARCHAR(400) NULL, 
+        tokens INTEGER NULL, 
+        ms INTEGER NULL, 
+        started_at DATETIME2 NULL, 
+        PRIMARY KEY (id)
+    );
+END;
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'ix_VitaAgentSteps_agent' AND object_id = OBJECT_ID(N'dbo.VitaAgentSteps'))
+BEGIN
+    CREATE INDEX [ix_VitaAgentSteps_agent] ON [VitaAgentSteps] (agent);
+END;
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'ix_VitaAgentSteps_run_id' AND object_id = OBJECT_ID(N'dbo.VitaAgentSteps'))
+BEGIN
+    CREATE INDEX [ix_VitaAgentSteps_run_id] ON [VitaAgentSteps] (run_id);
+END;
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'ix_VitaAgentSteps_started_at' AND object_id = OBJECT_ID(N'dbo.VitaAgentSteps'))
+BEGIN
+    CREATE INDEX [ix_VitaAgentSteps_started_at] ON [VitaAgentSteps] (started_at);
+END;
+GO
+
+IF EXISTS (SELECT 1 FROM dbo.VitaAlembicVersion WHERE version_num = '0001')
+BEGIN
+    UPDATE [VitaAlembicVersion] SET version_num='0002' WHERE [VitaAlembicVersion].version_num = '0001';
+END;
+GO
+
 PRINT 'Vita tables ensured';
 GO

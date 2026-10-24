@@ -534,5 +534,35 @@ BEGIN
 END;
 GO
 
+IF COL_LENGTH(N'dbo.VitaAgentSteps', N'parent_id') IS NULL
+BEGIN
+    ALTER TABLE [VitaAgentSteps] ADD parent_id VARCHAR(40) NULL;
+END;
+GO
+
+IF COL_LENGTH(N'dbo.VitaAgentSteps', N'requested_by') IS NULL
+BEGIN
+    ALTER TABLE [VitaAgentSteps] ADD requested_by VARCHAR(30) NULL;
+END;
+GO
+
+IF COL_LENGTH(N'dbo.VitaAgentSteps', N'kind') IS NULL
+BEGIN
+    ALTER TABLE [VitaAgentSteps] ADD kind VARCHAR(30) NULL;
+END;
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'ix_VitaAgentSteps_parent_id' AND object_id = OBJECT_ID(N'dbo.VitaAgentSteps'))
+BEGIN
+    CREATE INDEX [ix_VitaAgentSteps_parent_id] ON [VitaAgentSteps] (parent_id);
+END;
+GO
+
+IF EXISTS (SELECT 1 FROM dbo.VitaAlembicVersion WHERE version_num = '0002')
+BEGIN
+    UPDATE [VitaAlembicVersion] SET version_num='0003' WHERE [VitaAlembicVersion].version_num = '0002';
+END;
+GO
+
 PRINT 'Vita tables ensured';
 GO

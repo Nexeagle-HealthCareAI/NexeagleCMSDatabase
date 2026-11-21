@@ -11,6 +11,10 @@
 -- Tables
 --   WorkProjects       one row per product; NextNumber gives each item its
 --                      number, shown with the project key (HMS-142).
+--   WorkStatuses       the board's columns, per project. Each has a category (ToDo,
+--                      InProgress or Done) so the board knows what "finished" means
+--                      whatever the column is called. The team can add, rename,
+--                      reorder and remove columns.
 --   WorkSprints        time boxes (11 days by default). Items point at a sprint;
 --                      the sprint screens arrive in the next release.
 --   WorkItems          the work itself. Deleting hides the row (IsDeleted).
@@ -55,6 +59,25 @@ END
 ELSE PRINT 'Table already exists: WorkProjects';
 GO
 
+-- ── WorkStatuses (board columns) ─────────────────────────────────────────────
+IF OBJECT_ID('dbo.WorkStatuses', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.WorkStatuses (
+        StatusId    UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_WorkStatuses PRIMARY KEY,
+        ProjectId   UNIQUEIDENTIFIER NOT NULL CONSTRAINT FK_WorkStatuses_Project REFERENCES dbo.WorkProjects(ProjectId),
+        [Key]       NVARCHAR(40)     NOT NULL,   -- stored on items; never changes once made
+        Name        NVARCHAR(40)     NOT NULL,   -- shown to people; can be renamed
+        Category    NVARCHAR(20)     NOT NULL,   -- 'ToDo' | 'InProgress' | 'Done'
+        SortOrder   INT              NOT NULL CONSTRAINT DF_WorkStatuses_SortOrder DEFAULT (0),
+        CreatedAt   DATETIME2(3)     NOT NULL CONSTRAINT DF_WorkStatuses_CreatedAt DEFAULT (SYSUTCDATETIME()),
+        CONSTRAINT UQ_WorkStatuses_Project_Key UNIQUE (ProjectId, [Key]),
+        CONSTRAINT CK_WorkStatuses_Category CHECK (Category IN ('ToDo', 'InProgress', 'Done'))
+    );
+    PRINT 'Created table: WorkStatuses';
+END
+ELSE PRINT 'Table already exists: WorkStatuses';
+GO
+
 -- ── WorkSprints ──────────────────────────────────────────────────────────────
 IF OBJECT_ID('dbo.WorkSprints', 'U') IS NULL
 BEGIN
@@ -89,7 +112,7 @@ BEGIN
         ItemType        NVARCHAR(20)     NOT NULL,
         Title           NVARCHAR(300)    NOT NULL,
         Description     NVARCHAR(MAX)    NULL,       -- markdown from the editor
-        Status          NVARCHAR(20)     NOT NULL CONSTRAINT DF_WorkItems_Status DEFAULT ('ToDo'),
+        Status          NVARCHAR(40)     NOT NULL,   -- WorkStatuses.[Key] of the item's project
         Priority        NVARCHAR(20)     NOT NULL CONSTRAINT DF_WorkItems_Priority DEFAULT ('Medium'),
         StoryPoints     DECIMAL(5,1)     NULL,
         AssigneeUserId  UNIQUEIDENTIFIER NULL CONSTRAINT FK_WorkItems_Assignee REFERENCES dbo.CmsUsers(UserId),
@@ -97,6 +120,7 @@ BEGIN
         ParentId        UNIQUEIDENTIFIER NULL CONSTRAINT FK_WorkItems_Parent REFERENCES dbo.WorkItems(WorkItemId),
         SprintId        UNIQUEIDENTIFIER NULL CONSTRAINT FK_WorkItems_Sprint REFERENCES dbo.WorkSprints(SprintId),
         Labels          NVARCHAR(400)    NULL,       -- comma-separated, lower case
+        StartDate       DATE             NULL,
         DueDate         DATE             NULL,
         IsBlocked       BIT              NOT NULL CONSTRAINT DF_WorkItems_IsBlocked DEFAULT (0),
         BlockedReason   NVARCHAR(300)    NULL,
@@ -107,7 +131,6 @@ BEGIN
         CompletedAt     DATETIME2(3)     NULL,
         CONSTRAINT UQ_WorkItems_Project_Number UNIQUE (ProjectId, Number),
         CONSTRAINT CK_WorkItems_ItemType CHECK (ItemType IN ('Epic', 'Feature', 'Story', 'Task', 'Bug', 'Subtask')),
-        CONSTRAINT CK_WorkItems_Status   CHECK (Status IN ('ToDo', 'InProgress', 'InReview', 'Done')),
         CONSTRAINT CK_WorkItems_Priority CHECK (Priority IN ('Highest', 'High', 'Medium', 'Low', 'Lowest'))
     );
 
@@ -176,6 +199,25 @@ FROM @Projects p
 WHERE NOT EXISTS (SELECT 1 FROM dbo.WorkProjects w WHERE w.[Key] = p.[Key]);
 
 PRINT CONCAT('Starting projects added: ', @@ROWCOUNT);
+GO
+
+-- ── Starting columns ─────────────────────────────────────────────────────────
+-- Every project without columns gets the usual four. The API does the same for
+-- a project created from the board.
+DECLARE @Columns TABLE ([Key] NVARCHAR(40), Name NVARCHAR(40), Category NVARCHAR(20), SortOrder INT);
+INSERT INTO @Columns ([Key], Name, Category, SortOrder) VALUES
+    ('ToDo',       'To do',       'ToDo',       10),
+    ('InProgress', 'In progress', 'InProgress', 20),
+    ('InReview',   'In review',   'InProgress', 30),
+    ('Done',       'Done',        'Done',       40);
+
+INSERT INTO dbo.WorkStatuses (StatusId, ProjectId, [Key], Name, Category, SortOrder)
+SELECT NEWID(), p.ProjectId, c.[Key], c.Name, c.Category, c.SortOrder
+FROM dbo.WorkProjects p
+CROSS JOIN @Columns c
+WHERE NOT EXISTS (SELECT 1 FROM dbo.WorkStatuses s WHERE s.ProjectId = p.ProjectId);
+
+PRINT CONCAT('Starting columns added: ', @@ROWCOUNT);
 GO
 
 -- ── Permissions ──────────────────────────────────────────────────────────────

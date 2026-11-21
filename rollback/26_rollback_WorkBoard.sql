@@ -25,6 +25,7 @@ IF OBJECT_ID('dbo.WorkItemHistory', 'U')  IS NOT NULL DROP TABLE dbo.WorkItemHis
 IF OBJECT_ID('dbo.WorkItemComments', 'U') IS NOT NULL DROP TABLE dbo.WorkItemComments;
 IF OBJECT_ID('dbo.WorkItems', 'U')        IS NOT NULL DROP TABLE dbo.WorkItems;
 IF OBJECT_ID('dbo.WorkSprints', 'U')      IS NOT NULL DROP TABLE dbo.WorkSprints;
+IF OBJECT_ID('dbo.WorkStatuses', 'U')     IS NOT NULL DROP TABLE dbo.WorkStatuses;
 IF OBJECT_ID('dbo.WorkProjects', 'U')     IS NOT NULL DROP TABLE dbo.WorkProjects;
 GO
 

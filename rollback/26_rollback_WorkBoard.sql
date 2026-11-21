@@ -1,7 +1,7 @@
 -- =============================================================================
 -- Rollback for 26_CMSDatabase_WorkBoard.sql
 -- =============================================================================
--- Removes the Daily Work Board tables and its three permissions.
+-- Removes the Daily Work Board tables and its four permissions.
 -- ALL work items, comments and history are deleted. Take a backup first.
 -- =============================================================================
 
@@ -11,14 +11,14 @@ GO
 DELETE rp
 FROM dbo.CmsRolePermissions rp
 JOIN dbo.CmsPermissions p ON p.PermissionId = rp.PermissionId
-WHERE p.[Key] IN ('work.view', 'work.edit', 'work.manage');
+WHERE p.[Key] IN ('work.view', 'work.edit', 'work.manage', 'work.delete');
 
 DELETE up
 FROM dbo.CmsUserPermissions up
 JOIN dbo.CmsPermissions p ON p.PermissionId = up.PermissionId
-WHERE p.[Key] IN ('work.view', 'work.edit', 'work.manage');
+WHERE p.[Key] IN ('work.view', 'work.edit', 'work.manage', 'work.delete');
 
-DELETE FROM dbo.CmsPermissions WHERE [Key] IN ('work.view', 'work.edit', 'work.manage');
+DELETE FROM dbo.CmsPermissions WHERE [Key] IN ('work.view', 'work.edit', 'work.manage', 'work.delete');
 GO
 
 IF OBJECT_ID('dbo.WorkItemHistory', 'U')  IS NOT NULL DROP TABLE dbo.WorkItemHistory;

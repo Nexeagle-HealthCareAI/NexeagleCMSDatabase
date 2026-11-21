@@ -24,8 +24,11 @@
 -- Permissions
 --   work.view     open the board and read everything on it
 --   work.edit     create and change items, comment
---   work.manage   add projects, delete items
--- All three are granted to the Administrator role here. Give them to other
+--   work.manage   add projects; add, rename and reorder board columns
+--   work.delete   delete items, remove board columns, remove other people's
+--                 comments. Kept apart on purpose: deleting is the one action
+--                 that loses work, so it is given to few people.
+-- All four are granted to the Administrator role here, and to nobody else. Give them to other
 -- roles or people from Users & access. People must sign in again to pick up a
 -- new permission, because the CMS web app reads permissions at login.
 --
@@ -225,7 +228,8 @@ DECLARE @Perms TABLE ([Key] NVARCHAR(100), Action NVARCHAR(50), DisplayName NVAR
 INSERT INTO @Perms ([Key], Action, DisplayName, SortOrder) VALUES
     ('work.view',   'view',   'View the Daily Work Board',            130),
     ('work.edit',   'edit',   'Create and change work items',         131),
-    ('work.manage', 'manage', 'Manage work projects and delete items', 132);
+    ('work.manage', 'manage', 'Manage work projects and board columns', 132),
+    ('work.delete', 'delete', 'Delete work items and board columns',   133);
 
 INSERT INTO dbo.CmsPermissions (PermissionId, [Key], PageKey, Action, DisplayName, Category, SortOrder)
 SELECT NEWID(), p.[Key], 'work', p.Action, p.DisplayName, 'Daily Work Board', p.SortOrder
@@ -234,11 +238,11 @@ WHERE NOT EXISTS (SELECT 1 FROM dbo.CmsPermissions c WHERE c.[Key] = p.[Key]);
 
 PRINT CONCAT('Permissions added: ', @@ROWCOUNT);
 
--- Grant all three to Administrator.
+-- Grant all four to Administrator.
 INSERT INTO dbo.CmsRolePermissions (RoleId, PermissionId)
 SELECT 'B0000001-0000-0000-0000-000000000001', c.PermissionId
 FROM dbo.CmsPermissions c
-WHERE c.[Key] IN ('work.view', 'work.edit', 'work.manage')
+WHERE c.[Key] IN ('work.view', 'work.edit', 'work.manage', 'work.delete')
   AND NOT EXISTS (
       SELECT 1 FROM dbo.CmsRolePermissions rp
       WHERE rp.RoleId = 'B0000001-0000-0000-0000-000000000001' AND rp.PermissionId = c.PermissionId

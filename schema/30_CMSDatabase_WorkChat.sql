@@ -27,6 +27,12 @@
 USE CMSDatabase;
 GO
 
+-- The two filtered indexes below need these on, and sqlcmd starts with QUOTED_IDENTIFIER off.
+-- They stay on for every batch that follows in this script.
+SET ANSI_NULLS ON;
+SET QUOTED_IDENTIFIER ON;
+GO
+
 IF OBJECT_ID('dbo.WorkChatChannels', 'U') IS NULL
 BEGIN
     CREATE TABLE dbo.WorkChatChannels (
@@ -41,12 +47,23 @@ BEGIN
         CONSTRAINT CK_WorkChatChannels_Kind CHECK (Kind IN ('Board', 'Group', 'Direct'))
     );
 
-    CREATE UNIQUE INDEX UX_WorkChatChannels_Project ON dbo.WorkChatChannels (ProjectId) WHERE ProjectId IS NOT NULL;
-    CREATE UNIQUE INDEX UX_WorkChatChannels_DirectKey ON dbo.WorkChatChannels (DirectKey) WHERE DirectKey IS NOT NULL;
-
     PRINT 'Created table: WorkChatChannels';
 END
 ELSE PRINT 'Table already exists: WorkChatChannels';
+GO
+
+-- One conversation per board, and one per pair of people. Made on their own, so a run that
+-- created the table but stopped before the indexes is completed by running this script again.
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_WorkChatChannels_Project' AND object_id = OBJECT_ID('dbo.WorkChatChannels'))
+BEGIN
+    CREATE UNIQUE INDEX UX_WorkChatChannels_Project ON dbo.WorkChatChannels (ProjectId) WHERE ProjectId IS NOT NULL;
+    PRINT 'Created index: UX_WorkChatChannels_Project';
+END
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UX_WorkChatChannels_DirectKey' AND object_id = OBJECT_ID('dbo.WorkChatChannels'))
+BEGIN
+    CREATE UNIQUE INDEX UX_WorkChatChannels_DirectKey ON dbo.WorkChatChannels (DirectKey) WHERE DirectKey IS NOT NULL;
+    PRINT 'Created index: UX_WorkChatChannels_DirectKey';
+END
 GO
 
 IF OBJECT_ID('dbo.WorkChatMembers', 'U') IS NULL

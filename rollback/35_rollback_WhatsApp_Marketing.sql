@@ -23,4 +23,5 @@ IF OBJECT_ID('dbo.WaTemplates', 'U') IS NOT NULL DROP TABLE dbo.WaTemplates;
 IF OBJECT_ID('dbo.WaContacts', 'U') IS NOT NULL DROP TABLE dbo.WaContacts;
 IF OBJECT_ID('dbo.WaRates', 'U') IS NOT NULL DROP TABLE dbo.WaRates;
 IF OBJECT_ID('dbo.WaSettings', 'U') IS NOT NULL DROP TABLE dbo.WaSettings;
+IF OBJECT_ID('dbo.WaConnection', 'U') IS NOT NULL DROP TABLE dbo.WaConnection;
 GO

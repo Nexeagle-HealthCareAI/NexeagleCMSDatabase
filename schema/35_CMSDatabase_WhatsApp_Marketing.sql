@@ -4,8 +4,9 @@
 -- Run after scripts 01 to 34.
 --
 -- The CMS's WhatsApp section works on a marketing number of its own (not the
--- Doctor Dekho bot's). Its connection (phone number id, account id, token) comes
--- from the API's settings, not from here. Design: claude/whatsapp-marketing-design.md
+-- Doctor Dekho bot's). Its connection (phone number id, account id, token, app
+-- secret) is entered in CMS → WhatsApp → Setup and kept in WaConnection, the secrets
+-- encrypted by the API. Design: claude/whatsapp-marketing-design.md
 --
 --   WaContacts              everyone the number may message, with opt-in, and the chat state
 --   WaMessages              every message in and out, with delivery status and cost
@@ -15,9 +16,11 @@
 --   WaBroadcastRecipients   one row per person per broadcast
 --   WaRates                 price per message by country and category (editable)
 --   WaSettings              monthly budget, sending speed (one row)
+--   WaConnection            the Meta connection: ids, encrypted token and secrets (one row)
 --
 -- Permissions (area "WhatsApp"): whatsapp.view, .reply, .contacts, .broadcast,
--- .templates, .approve, .settings. Administrator and Manager get all; the new role
+-- .templates, .approve, .settings, .connect. Administrator gets all, Manager all but
+-- .connect (the Meta keys); the new role
 -- "Marketing team" gets view, reply, contacts, broadcast and templates.
 -- Safe to run more than once. People see new permissions when they next sign in.
 -- =============================================================================
@@ -230,6 +233,30 @@ BEGIN
 END
 GO
 
+IF OBJECT_ID('dbo.WaConnection', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.WaConnection (
+        ConnectionId        INT              NOT NULL CONSTRAINT PK_WaConnection PRIMARY KEY CONSTRAINT CK_WaConnection_One CHECK (ConnectionId = 1),
+        PhoneNumberId       NVARCHAR(40)     NULL,
+        WabaId              NVARCHAR(40)     NULL,
+        AppId               NVARCHAR(40)     NULL,
+        -- Encrypted by the API (AES-GCM, "v1:..."); never readable from the database alone.
+        AccessTokenEnc      NVARCHAR(MAX)    NULL,
+        AppSecretEnc        NVARCHAR(400)    NULL,
+        VerifyTokenEnc      NVARCHAR(400)    NULL,
+        -- The last 4 characters of the token, to recognise which one is in use.
+        AccessTokenHint     NVARCHAR(8)      NULL,
+        WebhookUrl          NVARCHAR(400)    NULL,
+        WebhookConnectedAt  DATETIME2(3)     NULL,
+        LastWebhookAt       DATETIME2(3)     NULL,
+        UpdatedByUserId     UNIQUEIDENTIFIER NULL CONSTRAINT FK_WaConnection_UpdatedBy REFERENCES dbo.CmsUsers(UserId),
+        UpdatedAt           DATETIME2(3)     NOT NULL CONSTRAINT DF_WaConnection_UpdatedAt DEFAULT (SYSUTCDATETIME())
+    );
+    INSERT INTO dbo.WaConnection (ConnectionId) VALUES (1);
+    PRINT 'Created table: WaConnection';
+END
+GO
+
 -- ── Permissions ──────────────────────────────────────────────────────────────
 
 MERGE dbo.CmsPermissions AS target
@@ -240,7 +267,8 @@ USING (VALUES
     ('whatsapp.broadcast', 'whatsapp', 'broadcast', 'Create and send WhatsApp broadcasts',                  123),
     ('whatsapp.templates', 'whatsapp', 'templates', 'Write WhatsApp templates and send them for approval',  124),
     ('whatsapp.approve',   'whatsapp', 'approve',   'Approve WhatsApp broadcasts that go over the budget',   125),
-    ('whatsapp.settings',  'whatsapp', 'settings',  'Change the WhatsApp profile, budget and rates',        126)
+    ('whatsapp.settings',  'whatsapp', 'settings',  'Change the WhatsApp profile, budget and rates',        126),
+    ('whatsapp.connect',   'whatsapp', 'connect',   'Connect the WhatsApp number: Meta keys and webhook',   127)
 ) AS source ([Key], PageKey, Action, DisplayName, SortOrder)
 ON target.[Key] = source.[Key]
 WHEN NOT MATCHED THEN
@@ -268,7 +296,7 @@ GO
 
 DECLARE @Grants TABLE (RoleId UNIQUEIDENTIFIER, [Key] NVARCHAR(100));
 INSERT @Grants SELECT 'B0000001-0000-0000-0000-000000000001', [Key] FROM dbo.CmsPermissions WHERE [Key] LIKE 'whatsapp.%';  -- Administrator
-INSERT @Grants SELECT 'B0000001-0000-0000-0000-000000000004', [Key] FROM dbo.CmsPermissions WHERE [Key] LIKE 'whatsapp.%';  -- Manager
+INSERT @Grants SELECT 'B0000001-0000-0000-0000-000000000004', [Key] FROM dbo.CmsPermissions WHERE [Key] LIKE 'whatsapp.%' AND [Key] <> 'whatsapp.connect';  -- Manager
 INSERT @Grants VALUES
     ('B0000001-0000-0000-0000-000000000007', 'whatsapp.view'),
     ('B0000001-0000-0000-0000-000000000007', 'whatsapp.reply'),
